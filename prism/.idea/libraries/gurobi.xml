@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="gurobi">
+    <CLASSES>
+      <root url="file:///opt/gurobi811/linux64/lib" />
+    </CLASSES>
+    <JAVADOC />
+    <NATIVE>
+      <root url="file:///opt/gurobi811/linux64/lib" />
+    </NATIVE>
+    <SOURCES />
+    <jarDirectory url="file:///opt/gurobi811/linux64/lib" recursive="false" />
+  </library>
+</component>

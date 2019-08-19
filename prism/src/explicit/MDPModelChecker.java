@@ -26,6 +26,13 @@
 
 package explicit;
 
+import gurobi.GRB;
+import gurobi.GRBConstr;
+import gurobi.GRBEnv;
+import gurobi.GRBException;
+import gurobi.GRBLinExpr;
+import gurobi.GRBModel;
+import gurobi.GRBVar;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -39,6 +46,7 @@ import java.util.Vector;
 
 import common.IterableStateSet;
 import common.StopWatch;
+import java.util.function.Consumer;
 import parser.VarList;
 import parser.ast.Declaration;
 import parser.ast.DeclarationIntUnbounded;
@@ -352,10 +360,10 @@ public class MDPModelChecker extends ProbModelChecker
 		boolean doPmaxQuotient = this.doPmaxQuotient;
 
 		// Switch to a supported method, if necessary
-		if (mdpSolnMethod == MDPSolnMethod.LINEAR_PROGRAMMING) {
+		/* if (mdpSolnMethod == MDPSolnMethod.LINEAR_PROGRAMMING) {
 			mdpSolnMethod = MDPSolnMethod.GAUSS_SEIDEL;
 			mainLog.printWarning("Switching to MDP solution method \"" + mdpSolnMethod.fullName() + "\"");
-		}
+		} */
 
 		// Check for some unsupported combinations
 		if (mdpSolnMethod == MDPSolnMethod.VALUE_ITERATION && valIterDir == ValIterDir.ABOVE) {
@@ -473,8 +481,16 @@ public class MDPModelChecker extends ProbModelChecker
 
 		// Compute probabilities (if needed)
 		if (numYes + numNo < n) {
-
-			if (!min && doPmaxQuotient) {
+      if (!min && getMDPSolnMethod() == MDPSolnMethod.LINEAR_PROGRAMMING) {
+        try {
+          res = computeReachProbsLP(mdp, no, yes, min, strat);
+        } catch (GRBException e) {
+          mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
+          mainLog.println(e.getStackTrace());
+          throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
+        }
+      }
+			else if (!min && doPmaxQuotient) {
 				MDPEquiv maxQuotient = maxQuotient(mdp, yes, no);
 				// MDPEquiv retains original state space, making the states that are not used
 				// trap states.
@@ -575,6 +591,17 @@ public class MDPModelChecker extends ProbModelChecker
 			}
 			res = computeReachProbsModPolIter(mdp, no, yes, min, strat);
 			break;
+		case LINEAR_PROGRAMMING: // TODO: Should not come here! Linear Programming should be handled outside Numeric
+      if (doIntervalIteration) {
+        throw new PrismNotSupportedException("Interval iteration is not supported for linear programming");
+      }
+      try {
+        res = computeReachProbsLP(mdp, no, yes, min, strat);
+      } catch (GRBException e) {
+        mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
+        mainLog.println(e.getStackTrace());
+        throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
+      }
 		default:
 			throw new PrismException("Unknown MDP solution method " + mdpSolnMethod.fullName());
 		}
@@ -589,6 +616,84 @@ public class MDPModelChecker extends ProbModelChecker
 
 		return res;
 	}
+
+	protected ModelCheckerResult computeReachProbsLP(MDP mdp, BitSet no, BitSet yes, boolean min, int strat[])
+      throws PrismException, GRBException {
+
+    // Construct LP
+    // Maximize sum_s V(s)
+    // subject to
+    //     for all a,           V(s) >= sum_s' p(s, a, s') * V(s')
+    //     for all s in yes,    V(s) = 1
+    //     for all s in no,     V(s) = 0
+    GRBEnv grbEnv = new GRBEnv("gurobi.log");
+    GRBModel mdpLinearProgram = new GRBModel(grbEnv);
+
+    int numStates = mdp.getNumStates();
+    double lb[] = new double[numStates]; // also initializes array to 0
+    double ub[] = new double[numStates];
+    double obj[] = new double[numStates];
+
+    // Initialize all upper bounds to 1
+    Arrays.fill(ub, 1);
+
+    // Set upper bounds to 0 for no states
+    for (int i = no.nextSetBit(0); i >= 0; i = no.nextSetBit(i+1)) {
+      ub[i] = 0.0;
+    }
+
+    // Set lower bounds to 1 for yes states
+    for (int i = yes.nextSetBit(0); i >= 0; i = yes.nextSetBit(i+1)) {
+      lb[i] = 1.0;
+    }
+
+    Arrays.fill(obj, 1.0);
+
+    // Create state variables, type = null implies all variables are of continuous type
+    GRBVar[] stateVars = mdpLinearProgram.addVars(lb, ub, obj, null, null);
+
+    // Create constraints
+    int numChoices = mdp.getNumChoices();
+    GRBLinExpr[] lhs = new GRBLinExpr[numChoices];
+    double[] rhs = new double[numChoices];
+    char[] senses = new char[numChoices];
+    Arrays.fill(senses, GRB.GREATER_EQUAL);
+
+    int k = 0;
+    for (int i = 0; i < numStates; i++) {
+      int choices = mdp.getNumChoices(i);
+      lhs[k] = new GRBLinExpr();
+      for (int j = 0; j < choices; j++) {
+        // Add V(s)
+        assert stateVars[i] != null;
+        lhs[k].addTerm(1, stateVars[i]);
+
+        // Add -1 * sum_s' p(s, a, s') * V(s')
+        for (Iterator<Entry<Integer, Double>> it = mdp.getTransitionsIterator(i, j); it.hasNext(); ) {
+          Entry<Integer, Double> tr = it.next();
+          lhs[k].addTerm(-tr.getValue(), stateVars[tr.getKey()]);
+        }
+        k++;
+      }
+    }
+
+    // Build constraints of the form lhs >= rhs in one shot
+    mdpLinearProgram.addConstrs(lhs, senses, rhs, null);
+
+    // No need of creating an objective explicitly as its already created using the obj array
+
+    // Call Gurobi on it
+    mdpLinearProgram.optimize();
+
+    // Process result and put it in res
+    ModelCheckerResult res = new ModelCheckerResult();
+    res.soln = new double[numStates];
+    for (int i = 0; i < numStates; i++) {
+      res.soln[i] = stateVars[i].get(GRB.DoubleAttr.X);
+    }
+
+    return res;
+  }
 
 	/**
 	 * Prob0 precomputation algorithm.
