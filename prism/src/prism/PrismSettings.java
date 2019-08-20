@@ -123,24 +123,32 @@ public class PrismSettings implements Observer
 	public static final	String PRISM_PARETO_EPSILON					= "prism.paretoEpsilon";
 	public static final	String PRISM_EXPORT_PARETO_FILENAME			= "prism.exportParetoFileName";
 
-    // multi-objective synthesis for games
+  // multi-objective synthesis for games
 	public static final     String PRISM_MULTI_GAUSS_SEIDEL					= "prism.multiGaussSeidel";
-        // iteration control
-        public static final	String PRISM_MULTI_MAX_C_ITER			= "prism.multiMaxCIter";
-        public static final	String PRISM_MULTI_MAX_R_ITER			= "prism.multiMaxRIter";
-        public static final	String PRISM_MULTI_MAX_D_ITER			= "prism.multiMaxDIter";
-        public static final	String PRISM_MULTI_D_ITER_OFFSET       		= "prism.multiDIterOffset";
-        public static final	String PRISM_MULTI_MIN_M         		= "prism.multiMinM";
-        public static final	String PRISM_MULTI_MAX_M         		= "prism.multiMaxM";
-        // rounding
+
+	// iteration control
+  public static final	String PRISM_MULTI_MAX_C_ITER			  = "prism.multiMaxCIter";
+  public static final	String PRISM_MULTI_MAX_R_ITER			  = "prism.multiMaxRIter";
+  public static final	String PRISM_MULTI_MAX_D_ITER			  = "prism.multiMaxDIter";
+  public static final	String PRISM_MULTI_D_ITER_OFFSET    = "prism.multiDIterOffset";
+  public static final	String PRISM_MULTI_MIN_M         		= "prism.multiMinM";
+  public static final	String PRISM_MULTI_MAX_M         		= "prism.multiMaxM";
+
+  // linear/quadratic programming
+  public static final String PRISM_LP_SOLVER            = "prism.lpBackend";
+  public static final String PRISM_GUROBI_TUNE_TIME = "prism.gurobiTune";
+  public static final String PRISM_LP_EXPORT            = "prism.lpModelExport";
+
+  // rounding
 	public static final     String PRISM_MULTI_ROUNDING					= "prism.multiRounding";
-        public static final	String PRISM_MULTI_BASELINE_ACCURACY 		= "prism.baselineAccuracy";
-        public static final	String PRISM_MULTI_INCREASE_FACTOR		= "prism.increaseFactor";
-        // logging
-        public static final	String LOG_MULTI_C_PARETO			= "log.multiCPareto";
-        public static final	String LOG_MULTI_D_PARETO			= "log.multiDPareto";
-        public static final	String LOG_MULTI_R_PARETO			= "log.multiRPareto";
-        public static final	String LOG_MULTI_STRATEGY			= "log.multiStrategy";
+  public static final	String PRISM_MULTI_BASELINE_ACCURACY 		= "prism.baselineAccuracy";
+  public static final	String PRISM_MULTI_INCREASE_FACTOR		  = "prism.increaseFactor";
+
+  // logging
+  public static final	String LOG_MULTI_C_PARETO			= "log.multiCPareto";
+  public static final	String LOG_MULTI_D_PARETO			= "log.multiDPareto";
+  public static final	String LOG_MULTI_R_PARETO			= "log.multiRPareto";
+  public static final	String LOG_MULTI_STRATEGY			= "log.multiStrategy";
 
 	
 	public static final String PRISM_LTL2DA_TOOL					= "prism.ltl2daTool";
@@ -345,8 +353,13 @@ public class PrismSettings implements Observer
 																			"Value iteration starts computing points rounded to the maximum reward in each dimension divided by the baseline accuracy, and this accuracy is increased by the increase factor after every iteration." },
 			{ DOUBLE_TYPE,		PRISM_MULTI_INCREASE_FACTOR,					"Increase factor for conjunctive query value iteration",			"4.0.3",			new Double(1.01),															"0,",																						
 																			"Accuracy of conjunctive query value iteration is increased by the increase factor after every iteration." },
-
-
+      // LINEAR PROGRAMMING OPTIONS
+      { CHOICE_TYPE,		PRISM_LP_SOLVER,					"Choice of linear programming solver",			"",			"gurobi",															"gurobi,cplex",
+                                      "Choose the backend used in solving linear/quadratic programs." },
+      { INTEGER_TYPE, PRISM_GUROBI_TUNE_TIME,					"Time (in secs) for turning Gurobi parameters",			"",			new Integer(-1),															"0,",
+                                      "Activates Gurobi's automatic parameter tuning with the given timeout." },
+      { STRING_TYPE,    PRISM_LP_EXPORT,			"LP/QP model/solution export filename",			"",			"",															"",
+                                      "If non-empty, the LP/QP model/solution constructed by the solver would be exported to this file. If set to 'auto', the model is exported to an automatically generated file." },
 			// OUTPUT OPTIONS:
 			{ BOOLEAN_TYPE,		PRISM_VERBOSE,							"Verbose output",						"2.1",		new Boolean(false),															"",																							
 																			"Display verbose output to log." },
@@ -1313,6 +1326,31 @@ public class PrismSettings implements Observer
 			set(PRISM_NO_DA_SIMPLIFY, true);
 		}
 
+		// LP/QP options
+    else if (sw.equals("lpbackend")) {
+      if (i < args.length - 1) {
+        set(PRISM_LP_SOLVER, args[++i]);
+      } else {
+        throw new PrismException("No sovler backend specified for -" + sw + " switch");
+      }
+    }
+    else if (sw.equals("exportlp")) {
+      if (i < args.length - 1) {
+        set(PRISM_LP_EXPORT, args[++i]);
+      } else {
+        throw new PrismException("No file specified for -" + sw + " switch");
+      }
+    }
+    else if (sw.equals("lptunetime")) {
+      if (i < args.length - 1) {
+        j = Integer.parseInt(args[++i]);
+        if (j < 0)
+          throw new NumberFormatException("");
+        set(PRISM_GUROBI_TUNE_TIME, j);
+      } else {
+        throw new PrismException("No file specified for -" + sw + " switch");
+      }
+    }
 		
 		// MULTI-OBJECTIVE MODEL CHECKING OPTIONS:
 		// Max different corner points that will be generated when performing

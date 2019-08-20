@@ -27,15 +27,16 @@
 package explicit;
 
 import gurobi.GRB;
-import gurobi.GRBConstr;
 import gurobi.GRBEnv;
 import gurobi.GRBException;
 import gurobi.GRBLinExpr;
 import gurobi.GRBModel;
 import gurobi.GRBVar;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -46,7 +47,6 @@ import java.util.Vector;
 
 import common.IterableStateSet;
 import common.StopWatch;
-import java.util.function.Consumer;
 import parser.VarList;
 import parser.ast.Declaration;
 import parser.ast.DeclarationIntUnbounded;
@@ -481,13 +481,21 @@ public class MDPModelChecker extends ProbModelChecker
 
 		// Compute probabilities (if needed)
 		if (numYes + numNo < n) {
-      if (!min && getMDPSolnMethod() == MDPSolnMethod.LINEAR_PROGRAMMING) {
-        try {
-          res = computeReachProbsLP(mdp, no, yes, min, strat);
-        } catch (GRBException e) {
-          mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
-          mainLog.println(e.getStackTrace());
-          throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
+      if (getMDPSolnMethod() == MDPSolnMethod.LINEAR_PROGRAMMING) {
+        if (settings.getString(PrismSettings.PRISM_LP_SOLVER).equalsIgnoreCase("gurobi")) {
+          try {
+            mainLog.println("\nSelecting Gurobi backend for solving LP...");
+            res = computeReachProbsLpGurobi(mdp, no, yes, min, strat);
+          } catch (GRBException e) {
+            mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
+            e.printStackTrace();
+            throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
+          }
+        } else if (settings.getString(PrismSettings.PRISM_LP_SOLVER).equalsIgnoreCase("cplex")) {
+          throw new PrismNotSupportedException("The CPLEX engine is not supported yet.");
+        } else {
+          // Control cannot come here
+          throw new PrismException("Incorrect LP backend specified.");
         }
       }
 			else if (!min && doPmaxQuotient) {
@@ -591,17 +599,6 @@ public class MDPModelChecker extends ProbModelChecker
 			}
 			res = computeReachProbsModPolIter(mdp, no, yes, min, strat);
 			break;
-		case LINEAR_PROGRAMMING: // TODO: Should not come here! Linear Programming should be handled outside Numeric
-      if (doIntervalIteration) {
-        throw new PrismNotSupportedException("Interval iteration is not supported for linear programming");
-      }
-      try {
-        res = computeReachProbsLP(mdp, no, yes, min, strat);
-      } catch (GRBException e) {
-        mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
-        mainLog.println(e.getStackTrace());
-        throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
-      }
 		default:
 			throw new PrismException("Unknown MDP solution method " + mdpSolnMethod.fullName());
 		}
@@ -617,25 +614,35 @@ public class MDPModelChecker extends ProbModelChecker
 		return res;
 	}
 
-	protected ModelCheckerResult computeReachProbsLP(MDP mdp, BitSet no, BitSet yes, boolean min, int strat[])
-      throws PrismException, GRBException {
+	protected ModelCheckerResult computeReachProbsLpGurobi(MDP mdp, BitSet no, BitSet yes, boolean min, int strat[])
+      throws GRBException {
+	  // TODO: coin4, K=2, property 2 does not work with -nopre option
 
-    // Construct LP
-    // Maximize sum_s V(s)
-    // subject to
-    //     for all a,           V(s) >= sum_s' p(s, a, s') * V(s')
-    //     for all s in yes,    V(s) = 1
-    //     for all s in no,     V(s) = 0
-    GRBEnv grbEnv = new GRBEnv("gurobi.log");
+    /*
+       Construct LP (max)
+       Minimize sum_s V(s)
+       subject to
+         for all a,           V(s) >= sum_s' p(s, a, s') * V(s')
+         for all s in yes,    V(s) = 1
+         for all s in no,     V(s) = 0
+
+       Construct LP (min)
+       Maximize sum_s V(s)
+       subject to
+         for all a,           V(s) <= sum_s' p(s, a, s') * V(s')
+         for all s in yes,    V(s) = 1
+         for all s in no,     V(s) = 0
+     */
+
+    GRBEnv grbEnv = new GRBEnv();
     GRBModel mdpLinearProgram = new GRBModel(grbEnv);
 
     int numStates = mdp.getNumStates();
     double lb[] = new double[numStates]; // also initializes array to 0
     double ub[] = new double[numStates];
-    double obj[] = new double[numStates];
 
     // Initialize all upper bounds to 1
-    Arrays.fill(ub, 1);
+    Arrays.fill(ub, 1.0);
 
     // Set upper bounds to 0 for no states
     for (int i = no.nextSetBit(0); i >= 0; i = no.nextSetBit(i+1)) {
@@ -647,42 +654,92 @@ public class MDPModelChecker extends ProbModelChecker
       lb[i] = 1.0;
     }
 
-    Arrays.fill(obj, 1.0);
-
     // Create state variables, type = null implies all variables are of continuous type
-    GRBVar[] stateVars = mdpLinearProgram.addVars(lb, ub, obj, null, null);
+    GRBVar[] stateVars = mdpLinearProgram.addVars(lb, ub, null, null, null);
 
     // Create constraints
     int numChoices = mdp.getNumChoices();
     GRBLinExpr[] lhs = new GRBLinExpr[numChoices];
     double[] rhs = new double[numChoices];
     char[] senses = new char[numChoices];
-    Arrays.fill(senses, GRB.GREATER_EQUAL);
+
+    if (!min) {
+      Arrays.fill(senses, GRB.GREATER_EQUAL);
+    }
+    else {
+      Arrays.fill(senses, GRB.LESS_EQUAL);
+    }
 
     int k = 0;
-    for (int i = 0; i < numStates; i++) {
+    for (int i = 0; i < numStates; i++)
+    {
       int choices = mdp.getNumChoices(i);
-      lhs[k] = new GRBLinExpr();
-      for (int j = 0; j < choices; j++) {
+      for (int j = 0; j < choices; j++)
+      {
         // Add V(s)
-        assert stateVars[i] != null;
-        lhs[k].addTerm(1, stateVars[i]);
+        lhs[k] = new GRBLinExpr();
+        lhs[k].addTerm(1.0, stateVars[i]);
 
         // Add -1 * sum_s' p(s, a, s') * V(s')
         for (Iterator<Entry<Integer, Double>> it = mdp.getTransitionsIterator(i, j); it.hasNext(); ) {
           Entry<Integer, Double> tr = it.next();
-          lhs[k].addTerm(-tr.getValue(), stateVars[tr.getKey()]);
+          if (yes.get(tr.getKey())) {
+            lhs[k].addConstant(-1.0 * tr.getValue());
+          } else {
+            lhs[k].addTerm(-1.0 * tr.getValue(), stateVars[tr.getKey()]);
+          }
         }
         k++;
       }
     }
 
-    // Build constraints of the form lhs >= rhs in one shot
+    // Build constraints of the form lhs >=/<= rhs in one shot
     mdpLinearProgram.addConstrs(lhs, senses, rhs, null);
 
-    // No need of creating an objective explicitly as its already created using the obj array
+    // Set the objective
+    GRBLinExpr objExpr = new GRBLinExpr();
+    for (int i = 0; i < numStates; i++) {
+      objExpr.addTerm(1.0, stateVars[i]);
+    }
+    if (!min) {
+      mdpLinearProgram.setObjective(objExpr, GRB.MINIMIZE);
+    } else {
+      mdpLinearProgram.setObjective(objExpr, GRB.MAXIMIZE);
+    }
 
     // Call Gurobi on it
+    // Tune the parameters if asked to
+    int tuneTimeout = settings.getInteger(PrismSettings.PRISM_GUROBI_TUNE_TIME);
+    if (tuneTimeout != -1) {
+      mainLog.println("\nTuning parameters turned on. Gurobi will search for solver \nparameters automatically for " + tuneTimeout + " seconds.");
+      mdpLinearProgram.set(GRB.DoubleParam.TuneTimeLimit, tuneTimeout);
+      mdpLinearProgram.tune();
+      // Select the best parameter
+      mdpLinearProgram.getTuneResult(0);
+    }
+
+    // Export the model/solution to a file if asked for
+    // Data output depends on the extension
+    // See https://www.gurobi.com/documentation/8.1/refman/java_grbmodel_write.html
+    // for more details
+    String exportFilename = settings.getString(PrismSettings.PRISM_LP_EXPORT);
+    if (!exportFilename.isEmpty()) {
+      // If argument is 'auto', then the model is output in the MPS format
+      if (exportFilename.equalsIgnoreCase("auto")) {
+        exportFilename = new SimpleDateFormat("'model-'yyyyMMddHHmmss'.mps'").format(new Date());
+      }
+      try {
+        mdpLinearProgram.write(exportFilename);
+        mainLog.println("Gurobi wrote data to " + exportFilename + "\n");
+      } catch (GRBException e) {
+        mainLog.println("Gurobi error " + e.getErrorCode() + " when trying to write model/solution to file. Dumping stacktrace...");
+        e.printStackTrace();
+        mainLog.println("Trying to continue optimization without printing model...\n");
+      }
+    }
+
+    // Do the actual solving, maybe with best tuned parameter
+    mainLog.println("\nSolving the LP...");
     mdpLinearProgram.optimize();
 
     // Process result and put it in res

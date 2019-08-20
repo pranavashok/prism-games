@@ -537,6 +537,23 @@ public class Prism extends PrismComponent implements PrismSettingsListener
 		settings.set(PrismSettings.PRISM_EXPORT_ADV_FILENAME, s);
 	}
 
+	// Set methods for linear/quadratic programming
+
+  public void setLpSolver(String s) throws PrismException
+  {
+    settings.set(PrismSettings.PRISM_LP_SOLVER, s);
+  }
+
+  public void setGurobiTune(int i) throws PrismException
+  {
+    settings.set(PrismSettings.PRISM_GUROBI_TUNE_TIME, i);
+  }
+
+  public void setLpModelExport(String s) throws PrismException
+  {
+    settings.set(PrismSettings.PRISM_LP_EXPORT, s);
+  }
+
 	// Set methods for miscellaneous options
 
 	public void setExportPrism(boolean b) throws PrismException
