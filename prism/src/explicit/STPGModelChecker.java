@@ -35,13 +35,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import gurobi.GRBEnv;
+import gurobi.GRBException;
+import gurobi.GurobiJni;
 import parser.ast.Expression;
-import prism.PrismComponent;
-import prism.PrismException;
-import prism.PrismFileLog;
-import prism.PrismLog;
-import prism.PrismNotSupportedException;
-import prism.PrismUtils;
+import prism.*;
 import strat.BoundedRewardDeterministicStrategy;
 import strat.MemorylessDeterministicStrategy;
 import strat.StepBoundedDeterministicStrategy;
@@ -52,6 +50,7 @@ import explicit.rewards.MDPRewardsSimple;
 import explicit.rewards.STPGRewards;
 import explicit.rewards.STPGRewardsSimple;
 import explicit.rewards.StateRewardsConstant;
+import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
 /**
  * Explicit-state model checker for two-player stochastic games (STPGs).
@@ -287,6 +286,24 @@ public class STPGModelChecker extends ProbModelChecker
 			case GAUSS_SEIDEL:
 				res = computeReachProbsGaussSeidel(stpg, no, yes, min1, min2, init, known);
 				break;
+			case LINEAR_PROGRAMMING:
+			{
+				if (settings.getString(PrismSettings.PRISM_LP_SOLVER).equalsIgnoreCase("gurobi")) {
+					try {
+						mainLog.println("\nSelecting Gurobi backend for solving LP...");
+						res = computeReachProbsLpGurobi(stpg, no, yes, min1, min2, init, known);
+					} catch (GRBException e) {
+						mainLog.println("Encountered error " + e.getErrorCode() + " while using Gurobi. Dumping stack trace... ");
+						e.printStackTrace();
+						throw new PrismException("Error using Gurobi. Solving LP terminated. Please try another method.");
+					}
+				} else if (settings.getString(PrismSettings.PRISM_LP_SOLVER).equalsIgnoreCase("cplex")) {
+					throw new PrismNotSupportedException("The CPLEX engine is not supported yet.");
+				} else {
+					// Control cannot come here
+					throw new PrismException("Incorrect LP backend specified.");
+				}
+			}
 			default:
 				throw new PrismException("Unknown STPG solution method " + solnMethod);
 			}
@@ -686,6 +703,13 @@ public class STPGModelChecker extends ProbModelChecker
 		res.timeTaken = timer / 1000.0;
 		return res;
 	}
+
+	protected ModelCheckerResult computeReachProbsLpGurobi(STPG stpg, BitSet no, BitSet yes, boolean min1, boolean min2, double init[], BitSet known)
+			throws PrismException, GRBException {
+		GRBEnv grbEnv = new GRBEnv();
+		throw new PrismException("Not implemented");
+	}
+
 
 	/**
 	 * Construct strategy information for min/max reachability probabilities.
